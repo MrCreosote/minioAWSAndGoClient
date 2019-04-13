@@ -1,4 +1,4 @@
-module github.com/mrcreosote/gofun
+module github.com/mrcreosote/minioAWSAndGoClients
 
 go 1.12
 
