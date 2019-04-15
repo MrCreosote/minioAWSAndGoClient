@@ -99,6 +99,13 @@ func doAWS(
 	}
 	fmt.Printf("file uploaded to, %s\n", objresult.Location)
 
+	objmeta, err := svc.HeadObject(&s3.HeadObjectInput{Bucket: &bucket, Key: &objectName})
+	if err != nil {
+		fmt.Printf("failed to get object metadata, %v\n", err)
+		return
+	}
+	fmt.Printf("file metadata:\n%v", objmeta)
+
 }
 
 func doMinio(
