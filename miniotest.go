@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/awserr"
@@ -24,7 +25,7 @@ func main() {
 	region := "us-west-1"
 
 	objectName := "somefile"
-	filePath := "/home/crushingismybusiness/examples.desktop"
+	filePath := "/home/crushingismybusiness/largefile.crap"
 	contentType := "text/plain"
 
 	doAWS(endpoint, accessKeyID, secretAccessKey, useSSL, bucket, region, objectName, filePath,
@@ -79,7 +80,9 @@ func doAWS(
 
 	fmt.Println(result)
 
-	uploader := s3manager.NewUploaderWithClient(svc)
+	uploader := s3manager.NewUploaderWithClient(svc, func(u *s3manager.Uploader) {
+		u.PartSize = 5 * 1024 * 1024 // 5MB per part
+	})
 
 	f, err := os.Open(filePath)
 	if err != nil {
@@ -88,16 +91,18 @@ func doAWS(
 	}
 
 	// Upload the file to S3.
+	uploadStart := time.Now()
 	objresult, err := uploader.Upload(&s3manager.UploadInput{
 		Bucket: aws.String(bucket),
 		Key:    aws.String(objectName),
 		Body:   f,
 	})
+	log.Printf("upload took %s\n", time.Since(uploadStart))
 	if err != nil {
 		fmt.Printf("failed to upload file, %v\n", err)
 		return
 	}
-	fmt.Printf("file uploaded to, %s\n", objresult.Location)
+	fmt.Printf("file uploaded to %s\n", objresult.Location)
 
 	objmeta, err := svc.HeadObject(&s3.HeadObjectInput{Bucket: &bucket, Key: &objectName})
 	if err != nil {
