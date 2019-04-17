@@ -40,7 +40,9 @@ func main() {
 		}
 
 		r := mux.NewRouter()
-		r.Handle("/", &rootHandler{s3Client: s3client, objectName: &objectName})
+		r.HandleFunc("/", rootHandler)
+		r.Handle("/upload", &uploadHandler{s3Client: s3client, bucket: &bucket,
+			objectName: &objectName})
 		log.Println(http.ListenAndServe(":20000", r))
 	} else {
 		doAWS(endpoint, accessKeyID, secretAccessKey, useSSL, bucket, region, objectName, filePath,
@@ -50,13 +52,41 @@ func main() {
 	}
 }
 
-type rootHandler struct {
+func rootHandler(w http.ResponseWriter, r *http.Request) {
+	fmt.Fprintln(w, "Hello world")
+}
+
+type uploadHandler struct {
 	s3Client   *s3.S3
+	bucket     *string
 	objectName *string
 }
 
-func (h *rootHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	fmt.Fprintf(w, "Hello world\n")
+func (h *uploadHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	uploader := s3manager.NewUploaderWithClient(h.s3Client, func(u *s3manager.Uploader) {
+		u.PartSize = 50 * 1024 * 1024 // 50MB per part
+	})
+
+	// Upload the file to S3.
+	uploadStart := time.Now()
+	objresult, err := uploader.Upload(&s3manager.UploadInput{
+		Bucket: h.bucket,
+		Key:    h.objectName,
+		Body:   r.Body,
+	})
+	fmt.Fprintf(w, "upload took %s\n", time.Since(uploadStart))
+	if err != nil {
+		fmt.Fprintf(w, "failed to upload file, %v\n", err)
+		return
+	}
+	fmt.Fprintf(w, "file uploaded to %s\n", objresult.Location)
+
+	objmeta, err := h.s3Client.HeadObject(&s3.HeadObjectInput{Bucket: h.bucket, Key: h.objectName})
+	if err != nil {
+		fmt.Fprintf(w, "failed to get object metadata, %v\n", err)
+		return
+	}
+	fmt.Fprintf(w, "file metadata:\n%v", objmeta)
 }
 
 func createBucketAWS(s3Client *s3.S3, bucket string) error {
@@ -118,7 +148,7 @@ func doAWS(
 	}
 
 	uploader := s3manager.NewUploaderWithClient(svc, func(u *s3manager.Uploader) {
-		u.PartSize = 4.5 * 1024 * 1024 * 1024 // 50MB per part
+		u.PartSize = 50 * 1024 * 1024 // 50MB per part
 	})
 
 	f, err := os.Open(filePath)
