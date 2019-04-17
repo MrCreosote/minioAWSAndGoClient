@@ -12,10 +12,12 @@ import (
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/s3"
 	"github.com/aws/aws-sdk-go/service/s3/s3manager"
+	"github.com/gorilla/mux"
 	"github.com/minio/minio-go"
 )
 
 func main() {
+	serverMode := false
 	endpoint := "localhost:9000"
 	accessKeyID := "9V25FKN0JY7IQZUW85RH"
 	secretAccessKey := "wckkTpC3lZ5QYqY0jIJXFJ6XEUsmD1nBCZK7vmva"
@@ -28,10 +30,33 @@ func main() {
 	filePath := "/home/crushingismybusiness/largefile.crap"
 	contentType := "text/plain"
 
-	doAWS(endpoint, accessKeyID, secretAccessKey, useSSL, bucket, region, objectName, filePath,
-		contentType)
-	//doMinio(endpoint, accessKeyID, secretAccessKey, useSSL, bucket, region, objectName,
-	//	filePath, contentType)
+	if serverMode {
+		r := mux.NewRouter()
+		_ = r
+	} else {
+		doAWS(endpoint, accessKeyID, secretAccessKey, useSSL, bucket, region, objectName, filePath,
+			contentType)
+		//doMinio(endpoint, accessKeyID, secretAccessKey, useSSL, bucket, region, objectName,
+		//	filePath, contentType)
+	}
+}
+
+func createBucketAWS(s3Client *s3.S3, bucket string) error {
+	input := &s3.CreateBucketInput{Bucket: aws.String(bucket)}
+	_, err := s3Client.CreateBucket(input)
+	if err != nil {
+		if aerr, ok := err.(awserr.Error); ok {
+			switch aerr.Code() {
+			case s3.ErrCodeBucketAlreadyOwnedByYou:
+				log.Println("Bucket already exists")
+				return nil // everything's groovy
+			default:
+				// do nothing
+			}
+		}
+		return err
+	}
+	return nil
 }
 
 func doAWS(
@@ -46,6 +71,7 @@ func doAWS(
 	contentType string) {
 
 	trueref := true
+	disableSSL := !useSSL
 
 	sess := session.Must(session.NewSession())
 	creds := credentials.NewStaticCredentials(accessKeyID, secretAccessKey, "")
@@ -53,35 +79,17 @@ func doAWS(
 		Credentials:      creds,
 		Endpoint:         &endpoint,
 		Region:           &region,
-		DisableSSL:       &trueref,  // detect correct setting based on url prefix, warn for http
-		S3ForcePathStyle: &trueref}) // minio pukes otherwise
+		DisableSSL:       &disableSSL, // detect correct setting based on url prefix, warn for http
+		S3ForcePathStyle: &trueref})   // minio pukes otherwise
 
-	input := &s3.CreateBucketInput{Bucket: aws.String(bucket)}
-
-	result, err := svc.CreateBucket(input)
+	err := createBucketAWS(svc, bucket)
 	if err != nil {
-		if aerr, ok := err.(awserr.Error); ok {
-			switch aerr.Code() {
-			case s3.ErrCodeBucketAlreadyExists:
-				fmt.Println(s3.ErrCodeBucketAlreadyExists, aerr.Error())
-			case s3.ErrCodeBucketAlreadyOwnedByYou:
-				// should keep going here
-				fmt.Println(s3.ErrCodeBucketAlreadyOwnedByYou, aerr.Error())
-			default:
-				fmt.Println(aerr.Error())
-			}
-		} else {
-			// Print the error, cast err to awserr.Error to get the Code and
-			// Message from an error.
-			fmt.Println(err.Error())
-		}
+		fmt.Println(err)
 		return
 	}
 
-	fmt.Println(result)
-
 	uploader := s3manager.NewUploaderWithClient(svc, func(u *s3manager.Uploader) {
-		u.PartSize = 5 * 1024 * 1024 // 5MB per part
+		u.PartSize = 4.5 * 1024 * 1024 * 1024 // 50MB per part
 	})
 
 	f, err := os.Open(filePath)
