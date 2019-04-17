@@ -18,7 +18,7 @@ import (
 )
 
 func main() {
-	serverMode := true
+	serverMode := false
 	endpoint := "localhost:9000"
 	accessKeyID := "9V25FKN0JY7IQZUW85RH"
 	secretAccessKey := "wckkTpC3lZ5QYqY0jIJXFJ6XEUsmD1nBCZK7vmva"
@@ -47,6 +47,15 @@ func helloWorld(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "Hello world")
 }
 
+type rootHandler struct {
+	s3Client   *s3.S3
+	objectName *string
+}
+
+func (h *rootHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	fmt.Fprintf(w, "Hello world")
+}
+
 func createBucketAWS(s3Client *s3.S3, bucket string) error {
 	input := &s3.CreateBucketInput{Bucket: aws.String(bucket)}
 	_, err := s3Client.CreateBucket(input)
@@ -65,16 +74,12 @@ func createBucketAWS(s3Client *s3.S3, bucket string) error {
 	return nil
 }
 
-func doAWS(
+func createS3Client(
 	endpoint string,
 	accessKeyID string,
 	secretAccessKey string,
 	useSSL bool,
-	bucket string,
-	region string,
-	objectName string,
-	filePath string,
-	contentType string) {
+	region string) *s3.S3 {
 
 	trueref := true
 	disableSSL := !useSSL
@@ -87,6 +92,21 @@ func doAWS(
 		Region:           &region,
 		DisableSSL:       &disableSSL, // detect correct setting based on url prefix, warn for http
 		S3ForcePathStyle: &trueref})   // minio pukes otherwise
+	return svc
+}
+
+func doAWS(
+	endpoint string,
+	accessKeyID string,
+	secretAccessKey string,
+	useSSL bool,
+	bucket string,
+	region string,
+	objectName string,
+	filePath string,
+	contentType string) {
+
+	svc := createS3Client(endpoint, accessKeyID, secretAccessKey, useSSL, region)
 
 	err := createBucketAWS(svc, bucket)
 	if err != nil {
