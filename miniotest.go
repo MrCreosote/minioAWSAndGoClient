@@ -17,6 +17,8 @@ import (
 	"github.com/minio/minio-go"
 )
 
+var partSize int64 = 5 * 1024 * 1024 // 5MB per part
+
 func main() {
 	serverMode := true
 	endpoint := "localhost:9000"
@@ -64,7 +66,7 @@ type uploadHandler struct {
 
 func (h *uploadHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	uploader := s3manager.NewUploaderWithClient(h.s3Client, func(u *s3manager.Uploader) {
-		u.PartSize = 50 * 1024 * 1024 // 50MB per part
+		u.PartSize = partSize
 	})
 
 	// Upload the file to S3.
@@ -148,7 +150,7 @@ func doAWS(
 	}
 
 	uploader := s3manager.NewUploaderWithClient(svc, func(u *s3manager.Uploader) {
-		u.PartSize = 50 * 1024 * 1024 // 50MB per part
+		u.PartSize = partSize
 	})
 
 	f, err := os.Open(filePath)
