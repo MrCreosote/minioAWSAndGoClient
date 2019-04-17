@@ -18,7 +18,7 @@ import (
 )
 
 func main() {
-	serverMode := false
+	serverMode := true
 	endpoint := "localhost:9000"
 	accessKeyID := "9V25FKN0JY7IQZUW85RH"
 	secretAccessKey := "wckkTpC3lZ5QYqY0jIJXFJ6XEUsmD1nBCZK7vmva"
@@ -32,8 +32,15 @@ func main() {
 	contentType := "text/plain"
 
 	if serverMode {
+		s3client := createS3Client(endpoint, accessKeyID, secretAccessKey, useSSL, region)
+		err := createBucketAWS(s3client, bucket)
+		if err != nil {
+			fmt.Println(err)
+			return
+		}
+
 		r := mux.NewRouter()
-		r.HandleFunc("/", helloWorld)
+		r.Handle("/", &rootHandler{s3Client: s3client, objectName: &objectName})
 		log.Println(http.ListenAndServe(":20000", r))
 	} else {
 		doAWS(endpoint, accessKeyID, secretAccessKey, useSSL, bucket, region, objectName, filePath,
@@ -43,17 +50,13 @@ func main() {
 	}
 }
 
-func helloWorld(w http.ResponseWriter, r *http.Request) {
-	fmt.Fprintf(w, "Hello world")
-}
-
 type rootHandler struct {
 	s3Client   *s3.S3
 	objectName *string
 }
 
 func (h *rootHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	fmt.Fprintf(w, "Hello world")
+	fmt.Fprintf(w, "Hello world\n")
 }
 
 func createBucketAWS(s3Client *s3.S3, bucket string) error {
