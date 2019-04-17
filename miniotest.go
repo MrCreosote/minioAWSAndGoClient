@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"time"
 
@@ -17,7 +18,7 @@ import (
 )
 
 func main() {
-	serverMode := false
+	serverMode := true
 	endpoint := "localhost:9000"
 	accessKeyID := "9V25FKN0JY7IQZUW85RH"
 	secretAccessKey := "wckkTpC3lZ5QYqY0jIJXFJ6XEUsmD1nBCZK7vmva"
@@ -32,13 +33,18 @@ func main() {
 
 	if serverMode {
 		r := mux.NewRouter()
-		_ = r
+		r.HandleFunc("/", helloWorld)
+		log.Println(http.ListenAndServe(":20000", r))
 	} else {
 		doAWS(endpoint, accessKeyID, secretAccessKey, useSSL, bucket, region, objectName, filePath,
 			contentType)
 		//doMinio(endpoint, accessKeyID, secretAccessKey, useSSL, bucket, region, objectName,
 		//	filePath, contentType)
 	}
+}
+
+func helloWorld(w http.ResponseWriter, r *http.Request) {
+	fmt.Fprintf(w, "Hello world")
 }
 
 func createBucketAWS(s3Client *s3.S3, bucket string) error {
