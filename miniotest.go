@@ -17,7 +17,8 @@ import (
 	"github.com/minio/minio-go"
 )
 
-var partSize int64 = 5 * 1024 * 1024 // 5MB per part
+var partSize int64 = 5 * 1024 * 1024 * 1024 // 5GB per part
+var uploadConcurrency = 1
 
 func main() {
 	serverMode := true
@@ -67,6 +68,7 @@ type uploadHandler struct {
 func (h *uploadHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	uploader := s3manager.NewUploaderWithClient(h.s3Client, func(u *s3manager.Uploader) {
 		u.PartSize = partSize
+		u.Concurrency = uploadConcurrency
 	})
 
 	// Upload the file to S3.
