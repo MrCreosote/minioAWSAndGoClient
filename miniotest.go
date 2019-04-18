@@ -19,7 +19,7 @@ import (
 	"github.com/minio/minio-go"
 )
 
-var partSize int64 = 5 * 1024 * 1024 * 1024 // 5GB per part
+var partSize int64 = 5 * 1024 * 1024 // 5MB per part
 var uploadConcurrency = 0
 var useTempFileVSStream = true
 
@@ -39,7 +39,7 @@ func main() {
 	tempdir := "temp_dir_for_test"
 
 	if serverMode {
-		err := os.Mkdir(tempdir, 0700)
+		err := os.MkdirAll(tempdir, 0700)
 		if err != nil {
 			log.Fatal(err)
 		}
