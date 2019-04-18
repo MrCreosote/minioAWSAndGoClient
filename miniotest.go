@@ -2,7 +2,9 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"log"
+	"math/rand"
 	"net/http"
 	"os"
 	"time"
@@ -18,7 +20,8 @@ import (
 )
 
 var partSize int64 = 5 * 1024 * 1024 * 1024 // 5GB per part
-var uploadConcurrency = 1
+var uploadConcurrency = 0
+var useTempFileVSStream = true
 
 func main() {
 	serverMode := true
@@ -33,10 +36,15 @@ func main() {
 	objectName := "somefile"
 	filePath := "/home/crushingismybusiness/largefile.crap"
 	contentType := "text/plain"
+	tempdir := "temp_dir_for_test"
 
 	if serverMode {
+		err := os.Mkdir(tempdir, 0700)
+		if err != nil {
+			log.Fatal(err)
+		}
 		s3client := createS3Client(endpoint, accessKeyID, secretAccessKey, useSSL, region)
-		err := createBucketAWS(s3client, bucket)
+		err = createBucketAWS(s3client, bucket)
 		if err != nil {
 			fmt.Println(err)
 			return
@@ -45,7 +53,7 @@ func main() {
 		r := mux.NewRouter()
 		r.HandleFunc("/", rootHandler)
 		r.Handle("/upload", &uploadHandler{s3Client: s3client, bucket: &bucket,
-			objectName: &objectName})
+			objectName: &objectName, tempdir: &tempdir})
 		log.Println(http.ListenAndServe(":20000", r))
 	} else {
 		doAWS(endpoint, accessKeyID, secretAccessKey, useSSL, bucket, region, objectName, filePath,
@@ -63,9 +71,31 @@ type uploadHandler struct {
 	s3Client   *s3.S3
 	bucket     *string
 	objectName *string
+	tempdir    *string
 }
 
 func (h *uploadHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	data := r.Body
+	if useTempFileVSStream {
+		tmpPath := fmt.Sprintf("%s/%d%d", *h.tempdir, rand.Int(), rand.Int())
+		if tmpFile, err := os.Create(tmpPath); err == nil {
+			defer os.Remove(tmpPath) // defers are LIFO
+			defer tmpFile.Close()
+			io.Copy(tmpFile, data)
+			tmpFile.Close()
+			if tmpFile2, err2 := os.Open(tmpPath); err2 == nil {
+				data = tmpFile2
+				defer tmpFile2.Close()
+			} else {
+				fmt.Fprintf(w, "Error opening temp file: %v", err)
+				return
+			}
+		} else {
+			fmt.Fprintf(w, "Error opening temp file: %v", err)
+			return
+		}
+	}
+
 	uploader := s3manager.NewUploaderWithClient(h.s3Client, func(u *s3manager.Uploader) {
 		u.PartSize = partSize
 		u.Concurrency = uploadConcurrency
@@ -76,7 +106,7 @@ func (h *uploadHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	objresult, err := uploader.Upload(&s3manager.UploadInput{
 		Bucket: h.bucket,
 		Key:    h.objectName,
-		Body:   r.Body,
+		Body:   data,
 	})
 	fmt.Fprintf(w, "upload took %s\n", time.Since(uploadStart))
 	if err != nil {
