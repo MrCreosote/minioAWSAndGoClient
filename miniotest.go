@@ -19,9 +19,10 @@ import (
 	"github.com/minio/minio-go"
 )
 
-var partSize int64 = 5 * 1024 * 1024 // 5MB per part
+var partSize int64 = 5 * 1024 * 1024 * 1024 // 5MB per part
 var uploadConcurrency = 0
 var useTempFileVSStream = true
+var useMinioClientVsAWS = true
 
 func main() {
 	serverMode := true
@@ -50,16 +51,27 @@ func main() {
 			return
 		}
 
+		minioClient, err := minio.New(endpoint, accessKeyID, secretAccessKey, useSSL)
+		if err != nil {
+			log.Fatalln(err)
+		}
+
 		r := mux.NewRouter()
 		r.HandleFunc("/", rootHandler)
-		r.Handle("/upload", &uploadHandler{s3Client: s3client, bucket: &bucket,
-			objectName: &objectName, tempdir: &tempdir})
+		r.Handle("/upload", &uploadHandler{
+			s3Client:    s3client,
+			minioClient: minioClient,
+			bucket:      &bucket,
+			objectName:  &objectName,
+			contentType: &contentType,
+			tempdir:     &tempdir})
 		log.Println(http.ListenAndServe(":20000", r))
+	} else if useMinioClientVsAWS {
+		doMinio(endpoint, accessKeyID, secretAccessKey, useSSL, bucket, region, objectName,
+			filePath, contentType)
 	} else {
 		doAWS(endpoint, accessKeyID, secretAccessKey, useSSL, bucket, region, objectName, filePath,
 			contentType)
-		//doMinio(endpoint, accessKeyID, secretAccessKey, useSSL, bucket, region, objectName,
-		//	filePath, contentType)
 	}
 }
 
@@ -68,10 +80,12 @@ func rootHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 type uploadHandler struct {
-	s3Client   *s3.S3
-	bucket     *string
-	objectName *string
-	tempdir    *string
+	s3Client    *s3.S3
+	minioClient *minio.Client
+	bucket      *string
+	objectName  *string
+	contentType *string
+	tempdir     *string
 }
 
 func (h *uploadHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -95,6 +109,14 @@ func (h *uploadHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if useMinioClientVsAWS {
+		loadWithMinio(h, w, data)
+	} else {
+		loadWithAWS(h, w, data)
+	}
+}
+
+func loadWithAWS(h *uploadHandler, w http.ResponseWriter, data io.Reader) {
 
 	uploader := s3manager.NewUploaderWithClient(h.s3Client, func(u *s3manager.Uploader) {
 		u.PartSize = partSize
@@ -120,7 +142,27 @@ func (h *uploadHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, "failed to get object metadata, %v\n", err)
 		return
 	}
-	fmt.Fprintf(w, "file metadata:\n%v", objmeta)
+	fmt.Fprintf(w, "file metadata:\n%v\n", objmeta)
+}
+
+func loadWithMinio(h *uploadHandler, w http.ResponseWriter, data io.Reader) {
+	uploadStart := time.Now()
+	n, err := h.minioClient.PutObject(*h.bucket, *h.objectName, data, -1,
+		minio.PutObjectOptions{
+			ContentType: *h.contentType,
+			PartSize:    uint64(partSize)})
+	if err != nil {
+		fmt.Fprintf(w, "faled to upload data %v\n", err)
+		return
+	}
+	fmt.Fprintf(w, "upload took %s\n", time.Since(uploadStart))
+	fmt.Fprintf(w, "Successfully uploaded %s of size %d\n", *h.objectName, n)
+	meta, err := h.minioClient.StatObject(*h.bucket, *h.objectName, minio.StatObjectOptions{})
+	if err != nil {
+		fmt.Fprintf(w, "faled to stat data %v\n", err)
+		return
+	}
+	fmt.Fprintf(w, "file metadata:\n%v\n", meta)
 }
 
 func createBucketAWS(s3Client *s3.S3, bucket string) error {
