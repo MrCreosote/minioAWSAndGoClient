@@ -19,13 +19,13 @@ import (
 	"github.com/minio/minio-go"
 )
 
-var partSize int64 = 5 * 1024 * 1024 * 1024 // 5MB per part
+var partSize int64 = 5 * 1024 * 1024 // 5MB per part
 var uploadConcurrency = 0
 var useTempFileVSStream = true
 var useMinioClientVsAWS = true
+var serverMode = false
 
 func main() {
-	serverMode := true
 	endpoint := "localhost:9000"
 	accessKeyID := "9V25FKN0JY7IQZUW85RH"
 	secretAccessKey := "wckkTpC3lZ5QYqY0jIJXFJ6XEUsmD1nBCZK7vmva"
@@ -89,6 +89,14 @@ type uploadHandler struct {
 }
 
 func (h *uploadHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if useMinioClientVsAWS {
+		loadWithMinio(h, w, r)
+	} else {
+		loadWithAWS(h, w, r)
+	}
+}
+
+func loadWithAWS(h *uploadHandler, w http.ResponseWriter, r *http.Request) {
 	data := r.Body
 	if useTempFileVSStream {
 		tmpPath := fmt.Sprintf("%s/%d%d", *h.tempdir, rand.Int(), rand.Int())
@@ -109,15 +117,6 @@ func (h *uploadHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if useMinioClientVsAWS {
-		loadWithMinio(h, w, data)
-	} else {
-		loadWithAWS(h, w, data)
-	}
-}
-
-func loadWithAWS(h *uploadHandler, w http.ResponseWriter, data io.Reader) {
-
 	uploader := s3manager.NewUploaderWithClient(h.s3Client, func(u *s3manager.Uploader) {
 		u.PartSize = partSize
 		u.Concurrency = uploadConcurrency
@@ -145,21 +144,47 @@ func loadWithAWS(h *uploadHandler, w http.ResponseWriter, data io.Reader) {
 	fmt.Fprintf(w, "file metadata:\n%v\n", objmeta)
 }
 
-func loadWithMinio(h *uploadHandler, w http.ResponseWriter, data io.Reader) {
-	uploadStart := time.Now()
-	n, err := h.minioClient.PutObject(*h.bucket, *h.objectName, data, -1,
-		minio.PutObjectOptions{
-			ContentType: *h.contentType,
-			PartSize:    uint64(partSize)})
-	if err != nil {
-		fmt.Fprintf(w, "faled to upload data %v\n", err)
-		return
+func loadWithMinio(h *uploadHandler, w http.ResponseWriter, r *http.Request) {
+	var uploadStart time.Time
+	var n int64
+	if useTempFileVSStream {
+		tmpPath := fmt.Sprintf("%s/%d%d", *h.tempdir, rand.Int(), rand.Int())
+		if tmpFile, err := os.Create(tmpPath); err == nil {
+			defer os.Remove(tmpPath) // defers are LIFO
+			defer tmpFile.Close()
+			io.Copy(tmpFile, r.Body)
+			tmpFile.Close()
+		} else {
+			fmt.Fprintf(w, "Error opening temp file: %v", err)
+			return
+		}
+		uploadStart = time.Now()
+		n2, err := h.minioClient.FPutObject(*h.bucket, *h.objectName, tmpPath,
+			minio.PutObjectOptions{
+				ContentType: *h.contentType,
+				PartSize:    uint64(partSize)})
+		if err != nil {
+			fmt.Fprintf(w, "faled to upload data %v\n", err)
+			return
+		}
+		n = n2
+	} else {
+		uploadStart = time.Now()
+		n2, err := h.minioClient.PutObject(*h.bucket, *h.objectName, r.Body, -1,
+			minio.PutObjectOptions{
+				ContentType: *h.contentType,
+				PartSize:    uint64(partSize)})
+		if err != nil {
+			fmt.Fprintf(w, "faled to upload data %v\n", err)
+			return
+		}
+		n = n2
 	}
 	fmt.Fprintf(w, "upload took %s\n", time.Since(uploadStart))
 	fmt.Fprintf(w, "Successfully uploaded %s of size %d\n", *h.objectName, n)
 	meta, err := h.minioClient.StatObject(*h.bucket, *h.objectName, minio.StatObjectOptions{})
 	if err != nil {
-		fmt.Fprintf(w, "faled to stat data %v\n", err)
+		fmt.Fprintf(w, "failed to stat data %v\n", err)
 		return
 	}
 	fmt.Fprintf(w, "file metadata:\n%v\n", meta)
@@ -272,8 +297,6 @@ func doMinio(
 		log.Fatalln(err)
 	}
 
-	log.Printf("%#v\n", minioClient) // minioClient is now setup
-
 	err = minioClient.MakeBucket(bucket, location)
 	if err != nil {
 		// Check to see if we already own this bucket (which happens if you run this twice)
@@ -287,14 +310,21 @@ func doMinio(
 		log.Printf("Successfully created %s\n", bucket)
 	}
 
-	// Upload the zip file
-
-	// Upload the zip file with FPutObject
+	uploadStart := time.Now()
 	n, err := minioClient.FPutObject(bucket, objectName, filePath,
-		minio.PutObjectOptions{ContentType: contentType})
+		minio.PutObjectOptions{
+			ContentType: contentType,
+			PartSize:    uint64(partSize)})
+	log.Printf("upload took %s\n", time.Since(uploadStart))
 	if err != nil {
 		log.Fatalln(err)
 	}
 
 	log.Printf("Successfully uploaded %s of size %d\n", objectName, n)
+	meta, err := minioClient.StatObject(bucket, objectName, minio.StatObjectOptions{})
+	if err != nil {
+		log.Printf("faied to stat data %v\n", err)
+		return
+	}
+	log.Printf("file metadata:\n%v\n", meta)
 }
