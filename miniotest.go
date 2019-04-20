@@ -1,12 +1,15 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"log"
 	"math/rand"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
@@ -26,9 +29,13 @@ var useMinioClientVsAWS = true
 var serverMode = false
 
 func main() {
-	endpoint := "localhost:9000"
-	accessKeyID := "9V25FKN0JY7IQZUW85RH"
-	secretAccessKey := "wckkTpC3lZ5QYqY0jIJXFJ6XEUsmD1nBCZK7vmva"
+	endpoint, accessKeyID, secretAccessKey, err := getConfig(os.Args[1])
+	if err != nil {
+		log.Fatalln(err)
+	}
+	// endpoint := "localhost:9000"
+	// accessKeyID := "9V25FKN0JY7IQZUW85RH"
+	// secretAccessKey := "wckkTpC3lZ5QYqY0jIJXFJ6XEUsmD1nBCZK7vmva"
 	useSSL := false
 
 	bucket := "mybukkit"
@@ -73,6 +80,39 @@ func main() {
 		doAWS(endpoint, accessKeyID, secretAccessKey, useSSL, bucket, region, objectName, filePath,
 			contentType)
 	}
+}
+
+func getConfig(host string) (string, string, string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", "", "", err
+	}
+	cfgfile, err := os.Open(home + "/.mc/config.json")
+	if err != nil {
+		return "", "", "", err
+	}
+	defer cfgfile.Close()
+	byteValue, err := ioutil.ReadAll(cfgfile)
+	if err != nil {
+		return "", "", "", err
+	}
+
+	var result map[string]interface{}
+	err = json.Unmarshal([]byte(byteValue), &result)
+	if err != nil {
+		return "", "", "", err
+	}
+	hosts := result["hosts"].(map[string]interface{})
+	hostmap := hosts[host].(map[string]interface{})
+	fmt.Println(hostmap)
+	hosturl := hostmap["url"].(string)
+	hostsplt := strings.Split(hosturl, "/")
+	hosturl = hostsplt[len(hostsplt)-1]
+	accessKey := hostmap["accessKey"].(string)
+	secretKey := hostmap["secretKey"].(string)
+	fmt.Println(hosturl)
+
+	return hosturl, accessKey, secretKey, nil
 }
 
 func rootHandler(w http.ResponseWriter, r *http.Request) {
