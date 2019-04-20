@@ -30,6 +30,7 @@ var useMinioClientVsAWS = true
 var serverMode = true
 
 func main() {
+	// TODO use http2 h2c - make configurable and off by default
 	endpoint, accessKeyID, secretAccessKey, err := getConfig(os.Args[1])
 	if err != nil {
 		log.Fatalln(err)
