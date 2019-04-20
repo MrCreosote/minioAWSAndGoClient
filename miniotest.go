@@ -9,6 +9,7 @@ import (
 	"math/rand"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -26,7 +27,7 @@ var partSize int64 = 5 * 1024 * 1024 // 5MB per part
 var uploadConcurrency = 0
 var useTempFileVSStream = true
 var useMinioClientVsAWS = true
-var serverMode = false
+var serverMode = true
 
 func main() {
 	endpoint, accessKeyID, secretAccessKey, err := getConfig(os.Args[1])
@@ -65,7 +66,7 @@ func main() {
 
 		r := mux.NewRouter()
 		r.HandleFunc("/", rootHandler)
-		r.Handle("/upload", &uploadHandler{
+		r.Handle("/upload/{client}", &uploadHandler{
 			s3Client:    s3client,
 			minioClient: minioClient,
 			bucket:      &bucket,
@@ -87,7 +88,8 @@ func getConfig(host string) (string, string, string, error) {
 	if err != nil {
 		return "", "", "", err
 	}
-	cfgfile, err := os.Open(home + "/.mc/config.json")
+	cfgpath := home + "/.mc/config.json"
+	cfgfile, err := os.Open(cfgpath)
 	if err != nil {
 		return "", "", "", err
 	}
@@ -103,14 +105,15 @@ func getConfig(host string) (string, string, string, error) {
 		return "", "", "", err
 	}
 	hosts := result["hosts"].(map[string]interface{})
-	hostmap := hosts[host].(map[string]interface{})
-	fmt.Println(hostmap)
+	hostmap, found := hosts[host].(map[string]interface{})
+	if !found {
+		return "", "", "", fmt.Errorf("No host %s found in mc config file %s", host, cfgpath)
+	}
 	hosturl := hostmap["url"].(string)
 	hostsplt := strings.Split(hosturl, "/")
 	hosturl = hostsplt[len(hostsplt)-1]
 	accessKey := hostmap["accessKey"].(string)
 	secretKey := hostmap["secretKey"].(string)
-	fmt.Println(hosturl)
 
 	return hosturl, accessKey, secretKey, nil
 }
@@ -129,17 +132,43 @@ type uploadHandler struct {
 }
 
 func (h *uploadHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if useMinioClientVsAWS {
-		loadWithMinio(h, w, r)
+	client := mux.Vars(r)["client"] // must be found
+	var useMinio bool
+	if client == "aws" {
+		useMinio = false
+	} else if client == "minio" {
+		useMinio = true
 	} else {
-		loadWithAWS(h, w, r)
+		fmt.Fprintf(w, "Illegal client value (ok: [aws, minio]): %s\n", client)
+		return
+	}
+	var pSize int64
+	pSizeStr, found := r.URL.Query()["partsize"]
+	if !found {
+		pSize = partSize
+	} else {
+		pSize2, err := strconv.ParseInt(pSizeStr[0], 10, 64)
+		if err != nil {
+			fmt.Fprintf(w, "Illegal part size: %s\n", pSizeStr[0])
+			return
+		}
+		pSize = pSize2
+	}
+	fmt.Fprintf(w, "Using part size %d\n", pSize)
+	if useMinio {
+		fmt.Fprint(w, "Using Minio client\n")
+		loadWithMinio(h, w, r, pSize)
+	} else {
+		fmt.Fprint(w, "Using AWS client\n")
+		loadWithAWS(h, w, r, pSize)
 	}
 }
 
-func loadWithAWS(h *uploadHandler, w http.ResponseWriter, r *http.Request) {
+func loadWithAWS(h *uploadHandler, w http.ResponseWriter, r *http.Request, partSize int64) {
 	data := r.Body
 	if useTempFileVSStream {
 		tmpPath := fmt.Sprintf("%s/%d%d", *h.tempdir, rand.Int(), rand.Int())
+		fmt.Fprintf(w, "using temp file %s\n", tmpPath)
 		if tmpFile, err := os.Create(tmpPath); err == nil {
 			defer os.Remove(tmpPath) // defers are LIFO
 			defer tmpFile.Close()
@@ -184,11 +213,12 @@ func loadWithAWS(h *uploadHandler, w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "file metadata:\n%v\n", objmeta)
 }
 
-func loadWithMinio(h *uploadHandler, w http.ResponseWriter, r *http.Request) {
+func loadWithMinio(h *uploadHandler, w http.ResponseWriter, r *http.Request, partSize int64) {
 	var uploadStart time.Time
 	var n int64
 	if useTempFileVSStream {
 		tmpPath := fmt.Sprintf("%s/%d%d", *h.tempdir, rand.Int(), rand.Int())
+		fmt.Fprintf(w, "using temp file %s\n", tmpPath)
 		if tmpFile, err := os.Create(tmpPath); err == nil {
 			defer os.Remove(tmpPath) // defers are LIFO
 			defer tmpFile.Close()
