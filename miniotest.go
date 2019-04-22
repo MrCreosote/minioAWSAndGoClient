@@ -26,8 +26,8 @@ import (
 var partSize int64 = 5 * 1024 * 1024 // 5MB per part
 var uploadConcurrency = 0
 var useTempFileVSStream = true
-var useMinioClientVsAWS = true
-var serverMode = true
+var clientType = "presign" // should be an enum really
+var serverMode = false
 
 func main() {
 	// TODO use http2 h2c - make configurable and off by default
@@ -75,12 +75,15 @@ func main() {
 			contentType: &contentType,
 			tempdir:     &tempdir})
 		log.Println(http.ListenAndServe(":20000", r))
-	} else if useMinioClientVsAWS {
+	} else if clientType == "minio" {
 		doMinio(endpoint, accessKeyID, secretAccessKey, useSSL, bucket, region, objectName,
 			filePath, contentType)
-	} else {
+	} else if clientType == "aws" {
 		doAWS(endpoint, accessKeyID, secretAccessKey, useSSL, bucket, region, objectName, filePath,
 			contentType)
+	} else {
+		doPresign(endpoint, accessKeyID, secretAccessKey, useSSL, bucket, region, objectName,
+			filePath)
 	}
 }
 
@@ -135,6 +138,11 @@ type uploadHandler struct {
 func (h *uploadHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	client := mux.Vars(r)["client"] // must be found
 	var useMinio bool
+	if client == "presign" {
+		fmt.Fprint(w, "Uploading with presigned URL\n")
+		loadWithPresign(h, w, r)
+		return
+	}
 	if client == "aws" {
 		useMinio = false
 	} else if client == "minio" {
@@ -163,6 +171,54 @@ func (h *uploadHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, "Using AWS client\n")
 		loadWithAWS(h, w, r, pSize)
 	}
+}
+
+func loadWithPresign(h *uploadHandler, w http.ResponseWriter, r *http.Request) {
+	var contentLength int64
+	cl := r.Header.Get("content-length")
+	if cl == "" {
+		contentLength = -1
+	} else {
+		cl2, err := strconv.ParseInt(cl, 10, 64)
+		if err != nil {
+			fmt.Fprintf(w, "Illegal content-length: %s\n", cl)
+			return
+		}
+		contentLength = cl2
+	}
+
+	putObj, pOO := h.s3Client.PutObjectRequest(&s3.PutObjectInput{
+		Bucket: h.bucket,
+		Key:    h.objectName,
+	})
+
+	url, _, err := putObj.PresignRequest(15 * time.Minute) // headers is nil in this case
+	if err != nil {
+		fmt.Fprintf(w, "error presigning request: %s\n", err)
+		return
+	}
+	req, err := http.NewRequest("PUT", url, r.Body)
+	if err != nil {
+		fmt.Fprintf(w, "error creating request: %s\n", err)
+		return
+	}
+	fmt.Println("pre headers")
+	fmt.Println(req.Header)
+
+	req.Header.Set("content-length", strconv.FormatInt(contentLength, 10))
+	fmt.Println("headers")
+	fmt.Println(req.Header)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		fmt.Fprintf(w, "error executing request: %s\n", err)
+	} else {
+		fmt.Fprintf(w, "response for request\n")
+		resp.Write(w)
+		writeObjectMeta(h, w)
+		fmt.Fprintf(w, "put object output\n")
+		fmt.Fprintf(w, "%v\n", pOO)
+	}
+
 }
 
 func loadWithAWS(h *uploadHandler, w http.ResponseWriter, r *http.Request, partSize int64) {
@@ -206,6 +262,10 @@ func loadWithAWS(h *uploadHandler, w http.ResponseWriter, r *http.Request, partS
 	}
 	fmt.Fprintf(w, "file uploaded to %s\n", objresult.Location)
 
+	writeObjectMeta(h, w)
+}
+
+func writeObjectMeta(h *uploadHandler, w http.ResponseWriter) {
 	objmeta, err := h.s3Client.HeadObject(&s3.HeadObjectInput{Bucket: h.bucket, Key: h.objectName})
 	if err != nil {
 		fmt.Fprintf(w, "failed to get object metadata, %v\n", err)
@@ -349,7 +409,6 @@ func doAWS(
 		return
 	}
 	fmt.Printf("file metadata:\n%v", objmeta)
-
 }
 
 func doMinio(
@@ -398,4 +457,64 @@ func doMinio(
 		return
 	}
 	log.Printf("file metadata:\n%v\n", meta)
+}
+
+func doPresign(
+	endpoint string,
+	accessKeyID string,
+	secretAccessKey string,
+	useSSL bool,
+	bucket string,
+	region string,
+	objectName string,
+	filePath string) {
+
+	svc := createS3Client(endpoint, accessKeyID, secretAccessKey, useSSL, region)
+
+	err := createBucketAWS(svc, bucket)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	f, err := os.Open(filePath)
+	if err != nil {
+		fmt.Printf("failed to open file %q, %v\n", filePath, err)
+		return
+	}
+	fstat, _ := f.Stat()
+	contentLength := fstat.Size()
+
+	putObj, pOO := svc.PutObjectRequest(&s3.PutObjectInput{
+		Bucket: &bucket,
+		Key:    &objectName,
+	})
+
+	url, _, err := putObj.PresignRequest(15 * time.Minute) // headers is nil in this case
+	if err != nil {
+		fmt.Printf("error presigning request: %s\n", err)
+		return
+	}
+	req, err := http.NewRequest("PUT", url, f)
+	if err != nil {
+		fmt.Printf("error creating request: %s\n", err)
+		return
+	}
+	fmt.Println("pre headers")
+	fmt.Println(req.Header)
+
+	req.Header.Set("content-length", strconv.FormatInt(contentLength, 10))
+	fmt.Println("headers")
+	fmt.Println(req.Header)
+	uploadStart := time.Now()
+	resp, err := http.DefaultClient.Do(req)
+	log.Printf("upload took %s\n", time.Since(uploadStart))
+	if err != nil {
+		fmt.Printf("error executing request: %s\n", err)
+	} else {
+		fmt.Printf("response for request\n")
+		resp.Write(os.Stdout)
+		fmt.Printf("put object output\n")
+		fmt.Printf("%v\n", pOO)
+	}
 }
