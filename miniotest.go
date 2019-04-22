@@ -27,7 +27,7 @@ var partSize int64 = 5 * 1024 * 1024 // 5MB per part
 var uploadConcurrency = 0
 var useTempFileVSStream = true
 var clientType = "presign" // should be an enum really
-var serverMode = false
+var serverMode = true
 
 func main() {
 	// TODO use http2 h2c - make configurable and off by default
@@ -187,7 +187,31 @@ func loadWithPresign(h *uploadHandler, w http.ResponseWriter, r *http.Request) {
 		contentLength = cl2
 	}
 
-	putObj, pOO := h.s3Client.PutObjectRequest(&s3.PutObjectInput{
+	data := r.Body
+	if useTempFileVSStream {
+		tmpPath := fmt.Sprintf("%s/%d%d", *h.tempdir, rand.Int(), rand.Int())
+		fmt.Fprintf(w, "using temp file %s\n", tmpPath)
+		if tmpFile, err := os.Create(tmpPath); err == nil {
+			defer os.Remove(tmpPath) // defers are LIFO
+			defer tmpFile.Close()
+			defer data.Close()
+			io.Copy(tmpFile, data)
+			tmpFile.Close()
+			data.Close()
+			if tmpFile2, err2 := os.Open(tmpPath); err2 == nil {
+				data = tmpFile2
+				defer tmpFile2.Close()
+			} else {
+				fmt.Fprintf(w, "Error opening temp file: %v", err)
+				return
+			}
+		} else {
+			fmt.Fprintf(w, "Error opening temp file: %v", err)
+			return
+		}
+	}
+
+	putObj, _ := h.s3Client.PutObjectRequest(&s3.PutObjectInput{ // PutObjectOutput is never filled
 		Bucket: h.bucket,
 		Key:    h.objectName,
 	})
@@ -197,17 +221,14 @@ func loadWithPresign(h *uploadHandler, w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, "error presigning request: %s\n", err)
 		return
 	}
-	req, err := http.NewRequest("PUT", url, r.Body)
+	// need to put a timeout on this. If the content-length is wrong, it'll hang forever
+	req, err := http.NewRequest("PUT", url, data)
 	if err != nil {
 		fmt.Fprintf(w, "error creating request: %s\n", err)
 		return
 	}
-	fmt.Println("pre headers")
-	fmt.Println(req.Header)
+	req.ContentLength = contentLength
 
-	req.Header.Set("content-length", strconv.FormatInt(contentLength, 10))
-	fmt.Println("headers")
-	fmt.Println(req.Header)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		fmt.Fprintf(w, "error executing request: %s\n", err)
@@ -215,8 +236,6 @@ func loadWithPresign(h *uploadHandler, w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, "response for request\n")
 		resp.Write(w)
 		writeObjectMeta(h, w)
-		fmt.Fprintf(w, "put object output\n")
-		fmt.Fprintf(w, "%v\n", pOO)
 	}
 
 }
@@ -229,8 +248,10 @@ func loadWithAWS(h *uploadHandler, w http.ResponseWriter, r *http.Request, partS
 		if tmpFile, err := os.Create(tmpPath); err == nil {
 			defer os.Remove(tmpPath) // defers are LIFO
 			defer tmpFile.Close()
+			defer data.Close()
 			io.Copy(tmpFile, data)
 			tmpFile.Close()
+			data.Close()
 			if tmpFile2, err2 := os.Open(tmpPath); err2 == nil {
 				data = tmpFile2
 				defer tmpFile2.Close()
@@ -283,8 +304,10 @@ func loadWithMinio(h *uploadHandler, w http.ResponseWriter, r *http.Request, par
 		if tmpFile, err := os.Create(tmpPath); err == nil {
 			defer os.Remove(tmpPath) // defers are LIFO
 			defer tmpFile.Close()
+			defer r.Body.Close()
 			io.Copy(tmpFile, r.Body)
 			tmpFile.Close()
+			defer r.Body.Close()
 		} else {
 			fmt.Fprintf(w, "Error opening temp file: %v", err)
 			return
@@ -403,7 +426,11 @@ func doAWS(
 	}
 	fmt.Printf("file uploaded to %s\n", objresult.Location)
 
-	objmeta, err := svc.HeadObject(&s3.HeadObjectInput{Bucket: &bucket, Key: &objectName})
+	printObjectMeta(svc, bucket, objectName)
+}
+
+func printObjectMeta(client *s3.S3, bucket string, objectName string) {
+	objmeta, err := client.HeadObject(&s3.HeadObjectInput{Bucket: &bucket, Key: &objectName})
 	if err != nil {
 		fmt.Printf("failed to get object metadata, %v\n", err)
 		return
@@ -485,7 +512,7 @@ func doPresign(
 	fstat, _ := f.Stat()
 	contentLength := fstat.Size()
 
-	putObj, pOO := svc.PutObjectRequest(&s3.PutObjectInput{
+	putObj, _ := svc.PutObjectRequest(&s3.PutObjectInput{ // PutObjectOutput is never filled
 		Bucket: &bucket,
 		Key:    &objectName,
 	})
@@ -500,12 +527,8 @@ func doPresign(
 		fmt.Printf("error creating request: %s\n", err)
 		return
 	}
-	fmt.Println("pre headers")
-	fmt.Println(req.Header)
+	req.ContentLength = contentLength
 
-	req.Header.Set("content-length", strconv.FormatInt(contentLength, 10))
-	fmt.Println("headers")
-	fmt.Println(req.Header)
 	uploadStart := time.Now()
 	resp, err := http.DefaultClient.Do(req)
 	log.Printf("upload took %s\n", time.Since(uploadStart))
@@ -514,7 +537,6 @@ func doPresign(
 	} else {
 		fmt.Printf("response for request\n")
 		resp.Write(os.Stdout)
-		fmt.Printf("put object output\n")
-		fmt.Printf("%v\n", pOO)
+		printObjectMeta(svc, bucket, objectName)
 	}
 }
