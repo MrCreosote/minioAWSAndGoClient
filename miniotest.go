@@ -156,6 +156,10 @@ func (h *uploadHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		getObject(h, w, r)
 		return
 	}
+	if client == "getmeta" {
+		writeObjectMeta(h, w)
+		return
+	}
 	var useMinio bool
 	if client == "aws" {
 		useMinio = false
@@ -289,6 +293,7 @@ func loadWithPresign(h *uploadHandler, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req.ContentLength = contentLength
+	req.Header.Set("x-amz-meta-foo", "bar")
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
