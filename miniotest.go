@@ -25,7 +25,7 @@ import (
 
 var partSize int64 = 5 * 1024 * 1024 // 5MB per part
 var uploadConcurrency = 0
-var useTempFileVSStream = true
+var useTempFileVSStream = false
 var clientType = "presign" // should be an enum really
 var serverMode = true
 
@@ -137,12 +137,17 @@ type uploadHandler struct {
 
 func (h *uploadHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	client := mux.Vars(r)["client"] // must be found
-	var useMinio bool
+	if client == "dumprequest" {
+		fmt.Fprintf(w, "Dumping request and returning\n")
+		r.Write(w)
+		return
+	}
 	if client == "presign" {
 		fmt.Fprint(w, "Uploading with presigned URL\n")
 		loadWithPresign(h, w, r)
 		return
 	}
+	var useMinio bool
 	if client == "aws" {
 		useMinio = false
 	} else if client == "minio" {
@@ -222,6 +227,7 @@ func loadWithPresign(h *uploadHandler, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// need to put a timeout on this. If the content-length is wrong, it'll hang forever
+	// actually no. It hangs forever in curl for 50MB CL on a 12GB file, doesn't hang in this code
 	req, err := http.NewRequest("PUT", url, data)
 	if err != nil {
 		fmt.Fprintf(w, "error creating request: %s\n", err)
