@@ -142,6 +142,11 @@ func (h *uploadHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		r.Write(w)
 		return
 	}
+	if client == "parseform" {
+		fmt.Fprintf(w, "Parsing multipart form and returning\n")
+		parseMultipart(w, r)
+		return
+	}
 	if client == "presign" {
 		fmt.Fprint(w, "Uploading with presigned URL\n")
 		loadWithPresign(h, w, r)
@@ -175,6 +180,37 @@ func (h *uploadHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	} else {
 		fmt.Fprint(w, "Using AWS client\n")
 		loadWithAWS(h, w, r, pSize)
+	}
+}
+
+func parseMultipart(w http.ResponseWriter, r *http.Request) {
+	multiReader, err := r.MultipartReader()
+	if err != nil {
+		fmt.Fprint(w, "Not a multipart form\n")
+		return
+	}
+	defer r.Body.Close()
+	for {
+		part, err := multiReader.NextPart()
+		if err != nil {
+			if err == io.EOF {
+				return
+			}
+			fmt.Fprintf(w, "Error parsing multipart form: %v\n", err)
+			return
+		}
+		defer part.Close()
+		fmt.Fprintf(w, "*** Part formname: %s, filename: %s***\n",
+			part.FormName(), part.FileName())
+		fmt.Fprintf(w, "Part headers:\n%v\n", part.Header)
+		contentLength := part.Header.Get("Content-Length")
+		if contentLength != "" {
+			fmt.Fprintf(w, "Content-Length was %s\n", contentLength)
+		} else {
+			fmt.Fprintf(w, "No Content-Length header\n")
+		}
+		fmt.Fprintf(w, "Part body:\n")
+		io.Copy(w, part)
 	}
 }
 
