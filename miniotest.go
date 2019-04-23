@@ -152,6 +152,10 @@ func (h *uploadHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		loadWithPresign(h, w, r)
 		return
 	}
+	if client == "get" {
+		getObject(h, w, r)
+		return
+	}
 	var useMinio bool
 	if client == "aws" {
 		useMinio = false
@@ -181,6 +185,21 @@ func (h *uploadHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, "Using AWS client\n")
 		loadWithAWS(h, w, r, pSize)
 	}
+}
+
+func getObject(h *uploadHandler, w http.ResponseWriter, r *http.Request) {
+
+	result, err := h.s3Client.GetObject(&s3.GetObjectInput{
+		Bucket: h.bucket,
+		Key:    h.objectName,
+	})
+	if err != nil {
+		fmt.Fprintf(w, "Error getting file: %v\n", err)
+		return
+	}
+	defer result.Body.Close()
+
+	io.Copy(w, result.Body)
 }
 
 func parseMultipart(w http.ResponseWriter, r *http.Request) {
