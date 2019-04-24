@@ -30,6 +30,7 @@ var clientType = "presign" // should be an enum really
 var serverMode = true
 
 func main() {
+	fmt.Println("V1")
 	// TODO use http2 h2c - make configurable and off by default
 	endpoint, accessKeyID, secretAccessKey, err := getConfig(os.Args[1])
 	if err != nil {
@@ -156,6 +157,10 @@ func (h *uploadHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		getObject(h, w, r)
 		return
 	}
+	if client == "getpresign" {
+		getObjectPresign(h, w, r)
+		return
+	}
 	if client == "getmeta" {
 		writeObjectMeta(h, w)
 		return
@@ -204,6 +209,29 @@ func getObject(h *uploadHandler, w http.ResponseWriter, r *http.Request) {
 	defer result.Body.Close()
 
 	io.Copy(w, result.Body)
+}
+
+func getObjectPresign(h *uploadHandler, w http.ResponseWriter, r *http.Request) {
+	fmt.Println("presign")
+	request, _ := h.s3Client.GetObjectRequest(&s3.GetObjectInput{ // PutObjOut is not useful
+		Bucket: h.bucket,
+		Key:    h.objectName,
+	})
+	url, _, err := request.PresignRequest(15 * time.Minute) // headers is nil in this case
+	if err != nil {
+		fmt.Fprintf(w, "Error getting file: %v\n", err)
+		return
+	}
+	resp, err := http.Get(url)
+	if err != nil {
+		// will need better error handling here
+		fmt.Fprintf(w, "error getting file: %s\n", err)
+		return
+	} else {
+		defer resp.Body.Close()
+		io.Copy(w, resp.Body)
+	}
+
 }
 
 func parseMultipart(w http.ResponseWriter, r *http.Request) {
