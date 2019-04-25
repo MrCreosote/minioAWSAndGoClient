@@ -67,6 +67,7 @@ func main() {
 		}
 
 		r := mux.NewRouter()
+		r.Use(loggingMiddleWare)
 		r.HandleFunc("/", rootHandler)
 		r.Handle("/upload/{client}", &uploadHandler{
 			s3Client:    s3client,
@@ -86,6 +87,28 @@ func main() {
 		doPresign(endpoint, accessKeyID, secretAccessKey, useSSL, bucket, region, objectName,
 			filePath)
 	}
+}
+
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+}
+
+func (rec *statusRecorder) WriteHeader(code int) {
+	rec.status = code
+	rec.ResponseWriter.WriteHeader(code)
+}
+
+func loggingMiddleWare(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		log.Printf("access: %s\n", r.RequestURI)
+
+		// see https://upgear.io/blog/golang-tip-wrapping-http-response-writer-for-middleware/
+		rec := statusRecorder{w, 200}
+		next.ServeHTTP(&rec, r)
+
+		log.Printf("response status: %v\n", rec.status)
+	})
 }
 
 func getConfig(host string) (string, string, string, error) {
@@ -124,7 +147,9 @@ func getConfig(host string) (string, string, string, error) {
 }
 
 func rootHandler(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(204) // must be before writing to body. Note code is obviously wrong
 	fmt.Fprintln(w, "Hello world")
+	log.Println("in hello")
 }
 
 type uploadHandler struct {
@@ -226,7 +251,6 @@ func getObjectPresign(h *uploadHandler, w http.ResponseWriter, r *http.Request) 
 	if err != nil {
 		// will need better error handling here
 		fmt.Fprintf(w, "error getting file: %s\n", err)
-		return
 	} else {
 		defer resp.Body.Close()
 		io.Copy(w, resp.Body)
