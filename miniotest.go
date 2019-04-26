@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -101,6 +102,7 @@ func (rec *statusRecorder) WriteHeader(code int) {
 
 func loggingMiddleWare(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r = addContext(r, "foo", "bar");
 		log.Printf("access: %s\n", r.RequestURI)
 
 		// see https://upgear.io/blog/golang-tip-wrapping-http-response-writer-for-middleware/
@@ -147,9 +149,10 @@ func getConfig(host string) (string, string, string, error) {
 }
 
 func rootHandler(w http.ResponseWriter, r *http.Request) {
+	log.Println(getContext(r, "foo"))
+	log.Println(getContext(r, "baz"))
 	w.WriteHeader(204) // must be before writing to body. Note code is obviously wrong
 	fmt.Fprintln(w, "Hello world")
-	log.Println("in hello")
 }
 
 type uploadHandler struct {
@@ -159,6 +162,22 @@ type uploadHandler struct {
 	objectName  *string
 	contentType *string
 	tempdir     *string
+}
+
+type ckey struct {
+	k string
+}
+
+func addContext(r *http.Request, key string, value string) *http.Request {
+	return r.WithContext(context.WithValue(r.Context(), ckey{key}, value))
+}
+
+func getContext(r *http.Request, key string) string {
+	ctx := r.Context().Value(ckey{key})
+	if (ctx == nil) {
+		return "";
+	}
+	return ctx.(string)
 }
 
 func (h *uploadHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
