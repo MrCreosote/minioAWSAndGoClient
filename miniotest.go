@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
-	"log"
 	"math/rand"
 	"net/http"
 	"os"
@@ -22,6 +21,7 @@ import (
 	"github.com/aws/aws-sdk-go/service/s3/s3manager"
 	"github.com/gorilla/mux"
 	"github.com/minio/minio-go"
+	log "github.com/sirupsen/logrus"
 )
 
 var partSize int64 = 5 * 1024 * 1024 // 5MB per part
@@ -32,6 +32,8 @@ var serverMode = true
 
 func main() {
 	fmt.Println("V1")
+	log.SetFormatter(&log.JSONFormatter{TimestampFormat: "2006-01-02T15:04:05.000-07:00"})
+	log.SetReportCaller(true)
 	// TODO use http2 h2c - make configurable and off by default
 	endpoint, accessKeyID, secretAccessKey, err := getConfig(os.Args[1])
 	if err != nil {
@@ -103,7 +105,10 @@ func (rec *statusRecorder) WriteHeader(code int) {
 func loggingMiddleWare(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		r = addContext(r, "foo", "bar");
-		log.Printf("access: %s\n", r.RequestURI)
+		log.WithFields(log.Fields{
+			"address": r.RemoteAddr,
+			"path": r.RequestURI,
+		}).Info("access")
 
 		// see https://upgear.io/blog/golang-tip-wrapping-http-response-writer-for-middleware/
 		rec := statusRecorder{w, 200}
